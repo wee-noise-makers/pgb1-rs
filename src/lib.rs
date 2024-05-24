@@ -4,6 +4,26 @@
 #![no_std]
 #![no_main]
 
+pub extern crate rp2040_hal as hal;
+
+#[cfg(feature = "rt")]
+extern crate cortex_m_rt;
+
+#[cfg(feature = "rt")]
+pub use hal::entry;
+
+/// The linker will place this boot block at the start of our program image. We
+/// need this to help the ROM bootloader get our code up and running.
+#[cfg(feature = "boot2")]
+#[link_section = ".boot2"]
+#[no_mangle]
+#[used]
+pub static BOOT2_FIRMWARE: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
+
+pub use hal::pac;
+
+pub const XOSC_CRYSTAL_FREQ: u32 = 12_000_000;
+
 use display_interface_spi::SPIInterfaceNoCS;
 use fugit::*;
 use ws2812_pio::Ws2812Direct;
@@ -17,7 +37,6 @@ use ssd1306::{prelude::*, Ssd1306};
 use rp2040_hal::{
     clocks::{init_clocks_and_plls, Clock},
     gpio::{FunctionSio, FunctionSpi, Pin, PullDown, SioInput, SioOutput},
-    pac,
     sio::Sio,
     spi,
     watchdog::Watchdog,
@@ -25,6 +44,143 @@ use rp2040_hal::{
 
 use critical_section;
 
+#[derive(Copy, Clone)]
+pub enum Keys {
+    TRACK,
+    STEP,
+    PLAY,
+    REC,
+    ALT,
+    PATT,
+    SONG,
+    MENU,
+    UP,
+    DOWN,
+    RIGHT,
+    LEFT,
+    A,
+    B,
+    K1,
+    K2,
+    K3,
+    K4,
+    K5,
+    K6,
+    K7,
+    K8,
+    K9,
+    K10,
+    K11,
+    K12,
+    K13,
+    K14,
+    K15,
+    K16,
+    }
+
+impl Keys {
+    pub const LIST: [Self; 30] = [Keys::TRACK,
+                                  Keys::STEP,
+                                  Keys::PLAY,
+                                  Keys::REC,
+                                  Keys::ALT,
+                                  Keys::PATT,
+                                  Keys::SONG,
+                                  Keys::MENU,
+                                  Keys::UP,
+                                  Keys::DOWN,
+                                  Keys::RIGHT,
+                                  Keys::LEFT,
+                                  Keys::A,
+                                  Keys::B,
+                                  Keys::K1,
+                                  Keys::K2,
+                                  Keys::K3,
+                                  Keys::K4,
+                                  Keys::K5,
+                                  Keys::K6,
+                                  Keys::K7,
+                                  Keys::K8,
+                                  Keys::K9,
+                                  Keys::K10,
+                                  Keys::K11,
+                                  Keys::K12,
+                                  Keys::K13,
+                                  Keys::K14,
+                                  Keys::K15,
+                                  Keys::K16,
+                                ];
+
+    pub fn mask(&self) -> u32 {
+        match *self {
+            Keys::TRACK => 0x10000000,
+            Keys::STEP  => 0x08000000,
+            Keys::PLAY  => 0x02000000,
+            Keys::REC   => 0x04000000,
+            Keys::ALT   => 0x00040000,
+            Keys::PATT  => 0x00001000,
+            Keys::SONG  => 0x00000040,
+            Keys::MENU  => 0x00000020,
+            Keys::UP    => 0x00020000,
+            Keys::DOWN  => 0x00800000,
+            Keys::RIGHT => 0x00000800,
+            Keys::LEFT  => 0x20000000,
+            Keys::A     => 0x01000000,
+            Keys::B     => 0x00000001,
+            Keys::K1    => 0x00400000,
+            Keys::K2    => 0x00010000,
+            Keys::K3    => 0x00000400,
+            Keys::K4    => 0x00000010,
+            Keys::K5    => 0x00000002,
+            Keys::K6    => 0x00000080,
+            Keys::K7    => 0x00002000,
+            Keys::K8    => 0x00080000,
+            Keys::K9    => 0x00200000,
+            Keys::K10   => 0x00008000,
+            Keys::K11   => 0x00000200,
+            Keys::K12   => 0x00000008,
+            Keys::K13   => 0x00000004,
+            Keys::K14   => 0x00000100,
+            Keys::K15   => 0x00004000,
+            Keys::K16   => 0x00100000,
+        }
+    }
+
+    pub fn led_index(&self) -> usize {
+        match *self {
+            Keys::TRACK => 4,
+            Keys::STEP  => 14,
+            Keys::PLAY  => 13,
+            Keys::REC   => 23,
+            Keys::ALT   => 3,
+            Keys::PATT  => 2,
+            Keys::SONG  => 1,
+            Keys::MENU  => 0,
+            Keys::UP    => 0,
+            Keys::DOWN  => 0,
+            Keys::RIGHT => 0,
+            Keys::LEFT  => 0,
+            Keys::A     => 0,
+            Keys::B     => 0,
+            Keys::K1    => 5,
+            Keys::K2    => 6,
+            Keys::K3    => 7,
+            Keys::K4    => 8,
+            Keys::K5    => 9,
+            Keys::K6    => 10,
+            Keys::K7    => 11,
+            Keys::K8    => 12,
+            Keys::K9    => 15,
+            Keys::K10   => 16,
+            Keys::K11   => 17,
+            Keys::K12   => 18,
+            Keys::K13   => 19,
+            Keys::K14   => 20,
+            Keys::K15   => 21,
+            Keys::K16   => 22,
+        }
+    }
+}
 pub struct KeyboardMatrix {
     col1 : Pin<rp2040_hal::gpio::bank0::Gpio18, FunctionSio<SioOutput>, PullDown>,
     col2 : Pin<rp2040_hal::gpio::bank0::Gpio19, FunctionSio<SioOutput>, PullDown>,
@@ -38,22 +194,43 @@ pub struct KeyboardMatrix {
     row4 : Pin<rp2040_hal::gpio::bank0::Gpio24, FunctionSio<SioInput>, PullDown>,
     row5 : Pin<rp2040_hal::gpio::bank0::Gpio25, FunctionSio<SioInput>, PullDown>,
     row6 : Pin<rp2040_hal::gpio::bank0::Gpio27, FunctionSio<SioInput>, PullDown>,
+
+    state : u32,
+    prev_state : u32,
 }
 
 impl KeyboardMatrix {
-    pub fn get_pressed_key(keys : &mut KeyboardMatrix, delay : &mut Delay) -> u32
+
+    pub fn pressed(&self, k : Keys) -> bool
     {
-        let mut cols : [&mut dyn OutputPin<Error = Infallible>; 5] = [&mut keys.col1, 
-                                                                      &mut keys.col2, 
-                                                                      &mut keys.col3, 
-                                                                      &mut keys.col4,
-                                                                      &mut keys.col5];
-        let mut rows : [&mut dyn InputPin<Error = Infallible>; 6] = [&mut keys.row1,
-                                                                     &mut keys.row2,
-                                                                     &mut keys.row3,
-                                                                     &mut keys.row4,
-                                                                     &mut keys.row5,
-                                                                     &mut keys.row6];
+        return (self.state & k.mask()) != 0;
+    }
+
+    pub fn falling(&self, k : Keys) -> bool
+    {
+        let all_falling = self.state & !self.prev_state;
+        return (all_falling & k.mask()) != 0;
+    }
+
+    pub fn raising(&self, k : Keys) -> bool
+    {
+        let all_raising = !self.state & self.prev_state;
+        return (all_raising & k.mask()) != 0;
+    }
+
+    pub fn scan(&mut self, delay : &mut Delay)
+    {
+        let mut cols : [&mut dyn OutputPin<Error = Infallible>; 5] = [&mut self.col1,
+                                                                      &mut self.col2,
+                                                                      &mut self.col3,
+                                                                      &mut self.col4,
+                                                                      &mut self.col5];
+        let mut rows : [&mut dyn InputPin<Error = Infallible>; 6] = [&mut self.row1,
+                                                                     &mut self.row2,
+                                                                     &mut self.row3,
+                                                                     &mut self.row4,
+                                                                     &mut self.row5,
+                                                                     &mut self.row6];
         let mut new_state : u32 = 0;
 
         for col in cols.iter_mut() {
@@ -73,7 +250,9 @@ impl KeyboardMatrix {
             }
             col.set_low().unwrap();
         }
-        return new_state;
+
+        self.prev_state = self.state;
+        self.state = new_state;
     }
 
 }
@@ -89,6 +268,7 @@ pub struct Peripherals {
     pub leds : Ws2812Direct<crate::pac::PIO0,
                             rp2040_hal::pio::SM0,
                             Pin<rp2040_hal::gpio::bank0::Gpio5, rp2040_hal::gpio::FunctionPio0, PullDown>>,
+    pub delay : Delay,
 }
 
 static mut DEVICE_PERIPHERALS: bool = false;
@@ -112,10 +292,8 @@ impl Peripherals {
         let mut watchdog = Watchdog::new(pac.WATCHDOG);
         let sio = Sio::new(pac.SIO);
     
-        // External high-speed crystal on the pico board is 12Mhz
-        let external_xtal_freq_hz = 12_000_000u32;
         let clocks = init_clocks_and_plls(
-            external_xtal_freq_hz,
+            XOSC_CRYSTAL_FREQ,
             pac.XOSC,
             pac.CLOCKS,
             pac.PLL_SYS,
@@ -148,6 +326,8 @@ impl Peripherals {
             row4 : pins.gpio24.into_pull_down_input(),
             row5 : pins.gpio25.into_pull_down_input(),
             row6 : pins.gpio27.into_pull_down_input(),
+            state : 0,
+            prev_state : 0,
         };
    
         // These are implicitly used by the spi driver if they are in the correct mode
@@ -187,37 +367,7 @@ impl Peripherals {
             keyboard: keys,
             display: display,
             leds : ws,
+            delay: delay,
         }
     }
 }
-
-pub const K_TRACK : u32 = 0x10000000;
-pub const K_STEP  : u32 = 0x08000000;
-pub const K_PLAY  : u32 = 0x02000000;
-pub const K_REC   : u32 = 0x04000000;
-pub const K_ALT   : u32 = 0x00040000;
-pub const K_PATT  : u32 = 0x00001000;
-pub const K_SONG  : u32 = 0x00000040;
-pub const K_MENU  : u32 = 0x00000020;
-pub const K_UP    : u32 = 0x00020000;
-pub const K_DOWN  : u32 = 0x00800000;
-pub const K_RIGHT : u32 = 0x00000800;
-pub const K_LEFT  : u32 = 0x20000000;
-pub const K_A     : u32 = 0x01000000;
-pub const K_B     : u32 = 0x00000001;
-pub const K_1     : u32 = 0x00400000;
-pub const K_2     : u32 = 0x00010000;
-pub const K_3     : u32 = 0x00000400;
-pub const K_4     : u32 = 0x00000010;
-pub const K_5     : u32 = 0x00000002;
-pub const K_6     : u32 = 0x00000080;
-pub const K_7     : u32 = 0x00002000;
-pub const K_8     : u32 = 0x00080000;
-pub const K_9     : u32 = 0x00200000;
-pub const K_10    : u32 = 0x00008000;
-pub const K_11    : u32 = 0x00000200;
-pub const K_12    : u32 = 0x00000008;
-pub const K_13    : u32 = 0x00000004;
-pub const K_14    : u32 = 0x00000100;
-pub const K_15    : u32 = 0x00004000;
-pub const K_16    : u32 = 0x00100000;
