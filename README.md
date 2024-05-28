@@ -4,6 +4,9 @@ Rust SDK for the [Wee Noise Makers
 PGB-1](https://www.crowdsupply.com/wee-noise-makers/wee-noise-makers-pgb-1)
 pocket synth/groovebox.
 
+<a href="https://www.crowdsupply.com/wee-noise-makers/wee-noise-makers-pgb-1"><img src="https://www.crowdsupply.com/img/3d7e/2d04eded-e04e-411a-957d-73035af73d7e/pgb1-2-1-top-with-hands-01_jpg_md-xl.jpg" align="center" width="50%" ></a>
+
+
 # Examples
 
 In this repository you will find two examples of Rust applications that you can
